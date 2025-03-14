@@ -1,341 +1,184 @@
-const path = require('path');
-const fs = require('fs');
-const glob = require('glob');
-const xml = require('xmldoc');
-const DOMParser = require('xmldom').DOMParser;
-const XMLSerializer = require('xmldom').XMLSerializer;
+const path = require("path");
+const fs = require("fs");
+const glob = require("glob");
+const xml = require("xmldoc");
+const { DOMParser, XMLSerializer } = require("xmldom");
 
 function findAndroidAppFolder(folder) {
-  const flat = 'android';
-  const nested = path.join('android', 'app');
-  if (fs.existsSync(path.join(folder, nested))) {
-    return nested;
-  }
-  if (fs.existsSync(path.join(folder, flat))) {
-    return flat;
-  }
-  return null;
-};
+    const nested = path.join("android", "app");
+    return fs.existsSync(path.join(folder, nested)) ? nested : null;
+}
 
 function findManifest(folder) {
-  const manifestPath = glob.sync(path.join('**', 'AndroidManifest.xml'), {
-    cwd: folder,
-    ignore: ['node_modules/**', '**/build/**', 'Examples/**', 'examples/**', '**/debug/**'],
-  })[0];
-
-  return manifestPath ? path.join(folder, manifestPath) : null;
-};
+    return glob.sync(path.join("**", "AndroidManifest.xml"), {
+        cwd: folder,
+        ignore: ["node_modules/**", "**/build/**", "**/debug/**"],
+    })[0];
+}
 
 function readManifest(manifestPath) {
-  return new xml.XmlDocument(fs.readFileSync(manifestPath, 'utf8'));
-};
+    return new xml.XmlDocument(fs.readFileSync(manifestPath, "utf8"));
+}
 
 const getPackageName = (manifest) => manifest.attr.package;
 
 function getApplicationClassName(folder) {
-  const files = glob.sync('**/*.java', {
-    cwd: folder
-  });
+    const files = glob.sync("**/*.{java,kt}", { cwd: folder });
 
-  const packages = files
-    .map(filePath => fs.readFileSync(path.join(folder, filePath), 'utf8'))
-    .map(file => file.match(/class (.*) implements (.*)ReactApplication/))
-    .filter(match => match);
+    const matches = files
+        .map((filePath) => fs.readFileSync(path.join(folder, filePath), "utf8"))
+        .map((file) => file.match(/class\s+(\w+)\s*[:\s]+Application/))
+        .filter(Boolean);
 
-    return packages.length ? packages[0][1] : null;
-  };
+    return matches.length ? matches[0][1] : null;
+}
 
-   // String append
-  function insert(str, index, value) {
-  return str.substr(0, index) + value + str.substr(index);
+function findGradleFile(folder) {
+    return glob.sync(path.join("**", "build.gradle"), {
+        cwd: folder,
+        ignore: ["node_modules/**", "**/build/**"],
+    })[0];
+}
+
+function readGradle(gradlePath) {
+    const gradleFile = fs.readFileSync(gradlePath, "utf8");
+    let packageId = "";
+    gradleFile.split(/\r?\n/).forEach((line) => {
+        if (line.includes("namespace") || line.includes("applicationId")) {
+            packageId = line.split(/\s+/)[1].replace(/['";]/g, "");
+        }
+    });
+    return packageId;
 }
 
 function findStringsXml(folder) {
-  console.log('findStringsXml()');
-  const stringsXmlPath = glob.sync(path.join('**', 'strings.xml'), {
-    cwd: folder,
-    ignore: ['node_modules/**', '**/build/**', 'Examples/**', 'examples/**', '**/debug/**'],
-  })[0];
+    return glob.sync(path.join("**", "strings.xml"), {
+        cwd: folder,
+        ignore: ["node_modules/**", "**/build/**"],
+    })[0];
+}
 
-  return stringsXmlPath ? path.join(folder, stringsXmlPath) : null;
-};
-
-
-// update string.xml file
 function updateConfigurationFile(confFilePath) {
-  console.log('updateConfigurationFile()');
-  const smisdkApikey = '\n<string name="smisdk_apikey"></string>';
-  const smisdkShowMessaging = '\n<bool name="smisdk_show_messaging">true</bool>';
-  const smisdkExclusionDomin = '\n<array name="smisdk_exclusion_domin"></array>';
+    console.log("Updating strings.xml...");
+    const configEntries = [
+        { key: "smisdk_apikey", type: "string" },
+        { key: "smisdk_show_messaging", type: "bool", value: "true" },
+        { key: "smisdk_exclusion_domin", type: "array" },
+    ];
 
-  var stringsXmlDoc = fs.readFileSync(confFilePath, 'utf8');
-  var resourcesEndIndex = stringsXmlDoc.search("</resources>")
-  if (stringsXmlDoc.search('smisdk_apikey') < 0) {
-    stringsXmlDoc = insert(stringsXmlDoc, resourcesEndIndex - 1, smisdkApikey);
-  }
-  if (stringsXmlDoc.search('smisdk_show_messaging') < 0) {
-    stringsXmlDoc = insert(stringsXmlDoc, resourcesEndIndex - 1, smisdkShowMessaging);
-  }
-  if (stringsXmlDoc.search('smisdk_exclusion_domin') < 0) {
-    stringsXmlDoc = insert(stringsXmlDoc, resourcesEndIndex - 1, smisdkExclusionDomin);
-  }
-  fs.writeFileSync(confFilePath, stringsXmlDoc, 'utf8');
-}
+    let stringsXmlDoc = fs.readFileSync(confFilePath, "utf8");
+    const resourcesEndIndex = stringsXmlDoc.search("</resources>");
 
-// update manifest file with app name
-function updateManifestFile(manifestPath, applicationClassName) {
-  console.log('updateManifestFile()');
-  var manifestXmlDoc = new DOMParser().parseFromString(fs.readFileSync(manifestPath, 'utf8'));
-  var attrApplication = manifestXmlDoc.getElementsByTagName("application");
-  // console.log('attrApplication:' + attrApplication[0]);
-  const attrApplicationLength = attrApplication[0].attributes.length;
-  console.log('attrApplicationLength:' + attrApplicationLength);
-  // insert/update android:name attribute to manifest
-
-  var i;
-  for (i = 0; i < attrApplicationLength; i++) {
-    var attrNodeName = attrApplication[0].attributes[i].nodeName;
-    console.log('attrNodeName:' + attrNodeName);
-    if (attrNodeName.search('android:name') >= 0) {
-      var attrNodeValue = attrApplication[0].attributes[i].nodeValue;
-      console.log('attrNodeValue:' + attrNodeValue);
-      if (attrNodeValue === ('.' + applicationClassName)) {
-        console.log('app class name matched');
-      } else {
-        console.log('app class name not matched:' + applicationClassName);
-        attrApplication[0].removeAttribute(attrApplication[0].attributes[i].nodeName);
-        attrApplication[0].setAttribute('android:name ', '.' + applicationClassName);
-        fs.writeFileSync(manifestPath, manifestXmlDoc, 'utf8');
-      }
-      break;
-    } else if (i == attrApplicationLength - 1) {
-      // android:name does not exist
-      console.log('android:name does not exist in manifest file');
-      attrApplication[0].setAttribute('android:name ', '.' + applicationClassName);
-      fs.writeFileSync(manifestPath, manifestXmlDoc, 'utf8');
-    }
-  }
-}
-
-
-//// Main function to perform integration
-function projectConfigAndroid(folder) {
-  const androidAppFolder = findAndroidAppFolder(folder);
-
-  if (!androidAppFolder) {
-    console.log('App folder not available.');
-    return null;
-  }
-
-  const sourceDir = path.join(folder, androidAppFolder);
-  console.log('sourceDir: ' + sourceDir);
-
-  const manifestPath = findManifest(sourceDir);
-  console.log('manifestPath: ' + manifestPath);
-
-  if (!manifestPath) {
-    return null;
-  }
-
-  // check app class Availability
-
-  var applicationClassName = getApplicationClassName(sourceDir + '/src/main')
-  console.log('applicationClassName before:' + applicationClassName);
-  if (applicationClassName == null) {
-    // Application class not available. 
-    //Copy application class and update manifest with application name
-
-    console.log('Application class not available. Please use sample ApplicaitionClass.txt to create one and update AndroidManifest.xml with application name.');
-    // const manifest = readManifest(manifestPath);
-    // const packageName = getPackageName(manifest);
-    // const packageNameStr = "package " + packageName + ';\n';
-    // const packageFolder = packageName.replace(/\./g, path.sep);
-    // const appPackagePath = path.join(sourceDir, `src/main/java/${packageFolder}`);
-
-    // var datamiAppFile = fs.readFileSync('ApplicationClass.txt', 'utf8')
-    // if (datamiAppFile.search(packageNameStr) < 0) {
-    //   var datamiAppFile = insert(datamiAppFile, 0, packageNameStr);
-    // }
-    // var datamiApplicationClassName = 'MainApplication';
-    // fs.writeFileSync(appPackagePath + '/' + datamiApplicationClassName + '.java', datamiAppFile, 'utf8');
-
-    // update manifest with app name
-    // //updateManifestFile(manifestPath, datamiApplicationClassName);
-
-    // update configuration file
-    const stringsXmlPath = findStringsXml(sourceDir);
-    console.log('stringsXmlPath: ' + stringsXmlPath);
-    if (stringsXmlPath != null) {
-      updateConfigurationFile(stringsXmlPath);
-    }
-  } else {
-      // Application class available
-      var applicationClassNameSplit = applicationClassName.split(' ');
-      if (applicationClassNameSplit.length > 0) {
-        applicationClassName = applicationClassNameSplit[0];
-        console.log('applicationClassName after:' + applicationClassName);
-
-        const manifest = readManifest(manifestPath);
-        const packageName = getPackageName(manifest);
-        // console.log('packageName: ' + packageName);
-        const packageFolder = packageName.replace(/\./g, path.sep);
-        // console.log('packageFolder: ' + packageFolder);
-        const mainApplicationPath = path.join(sourceDir,
-          `src/main/java/${packageFolder}/${applicationClassName}.java`);
-        console.log('mainApplicationPath: ' + mainApplicationPath);
-
-        //Read application class
-        const appFile = fs.readFileSync(mainApplicationPath, 'utf8');
-        var isPackageExist = appFile.search('SmiSdkReactPackage');
-        console.log('isPackageExist: ' + isPackageExist);
-        if (isPackageExist < 0) {
-          const smiPackageName = ', new SmiSdkReactPackage()';
-          const smiPackageNameFor62 = 'packages.add(new SmiSdkReactPackage());';
-
-   		    const packageImport = 'import com.datami.smi.SdStateChangeListener; \nimport com.datami.smi.SmiResult; \nimport com.datami.smi.SmiSdk; \nimport com.datami.smisdk_plugin.SmiSdkReactModule; \nimport com.datami.smisdk_plugin.SmiSdkReactPackage; \nimport android.util.Log;\n';
-
-   		 	  const initSponsoredDataAPI = "\n     int userIdRes = getResources().getIdentifier(\"smisdk_user_id\", \"string\", this.getPackageName());\n" +
-                "     int userTagRes = getResources().getIdentifier(\"smisdk_user_tag\", \"array\", this.getPackageName());\n" +
-                "     int startProxyRes = getResources().getIdentifier(\"smisdk_start_proxy\", \"bool\", this.getPackageName());\n" +
-                "     String userId = \"\";\n" +
-                "     List<String> userTags = null;\n" +
-                "     boolean isStartProxy = true;\n" +
-                "     try{\n" +
-                "         if(userIdRes!=0){\n" +
-                "             userId = getResources().getString(userIdRes);\n" +
-                "         }\n" +
-                "     }catch (Exception ex){\n" +
-                "         ex.printStackTrace();\n" +
-                "     }\n" +
-                "     try{\n" +
-                "         if(userTagRes!=0){\n" +
-                "             userTags = Arrays.asList(getResources().getStringArray(userTagRes));\n" +
-                "         }\n" +
-                "     }catch (Exception ex){\n" +
-                "         ex.printStackTrace();\n" +
-                "     }\n" +
-                "     try{\n" +
-                "         if(startProxyRes!=0){\n" +
-                "             isStartProxy = getResources().getBoolean(startProxyRes);\n" +
-                "         }\n" +
-                "     }catch (Exception ex){\n" +
-                "         ex.printStackTrace();\n" +
-                "     }\n" +
-                "\n" +
-                "     Log.d(\"[dmi]Application\", \"usrIDRes: \" + userIdRes + \", usrTagRes: \" + userTagRes + \", stProxyRes: \" + startProxyRes);\n" +
-                "     Log.d(\"[dmi]Application\", \"usrId: \" + userId + \", usrTags: \" + userTags + \", stProxy: \" + isStartProxy);\n" +
-                "\n" +
-                "     SmiSdk.initSponsoredData(getResources().getString(R.string.smisdk_apikey),\n" +
-                "     this, userId, R.mipmap.ic_launcher,\n" +
-                "     getResources().getBoolean(R.bool.smisdk_show_messaging),\n" +
-                "     Arrays.asList(getResources().getStringArray(R.array.smisdk_exclusion_domin)), userTags, isStartProxy);";
-
-          const onCreateMethod = '\n @Override \n public void onCreate() { \n  super.onCreate();' + initSponsoredDataAPI + ' \n}';
-
-          const stateChangeListnerStr = ' SdStateChangeListener, ';
-
-          const onChangeMethod = '\n@Override \n public void onChange(SmiResult smiResult) {\n SmiSdkReactModule.setSmiResultToModule(smiResult);\n}';
-
-          var intMainPackageIndex = appFile.search("new MainReactPackage()")
-          console.log('intMainPackageIndex: ' + intMainPackageIndex);
-
-          const packageImportArray = 'import java.util.Arrays; \n';
-          var intMainPackageIndexLatest = appFile.search("return packages;")
-          console.log('intMainPackageIndexLatest: ' + intMainPackageIndexLatest);
-
-          if (intMainPackageIndex > 0) {
-            // add package name
-            var appfileNew = insert(appFile, intMainPackageIndex + 22, smiPackageName);
-            // add import
-            var intImportIndex = appFile.search("import")
-            appfileNew = insert(appfileNew, intImportIndex, packageImport);
-
-            //add sdStateChangeListner
-            var implementsIndex = appfileNew.search("implements");
-            if (implementsIndex > 0) {
-              appfileNew = insert(appfileNew, implementsIndex + 10, stateChangeListnerStr);
-            }
-            // add initSponsoredData Api
-            var intSuperIndex = appfileNew.search("super.onCreate()");
-            console.log('intSuperIndex: ' + intSuperIndex);
-            if (intSuperIndex > 0) {
-              appfileNew = insert(appfileNew, intSuperIndex + 17, initSponsoredDataAPI);
-            } else {
-              // add onCreate method with initSponsoredData API
-              var n = appfileNew.lastIndexOf("}");
-              console.log('lastIndexOf }: ' + n);
-              appfileNew = insert(appfileNew, n - 1, onCreateMethod);
-            }
-
-            // add onChange method
-            var lastchar = appfileNew.lastIndexOf("}");
-            console.log('lastchar: ' + n);
-
-            appfileNew = insert(appfileNew, lastchar - 1, onChangeMethod);
-
-            fs.writeFileSync(mainApplicationPath, appfileNew, 'utf8');
-
-            // const appFileNew2 = fs.readFileSync(mainApplicationPath, 'utf8')
-            updateManifestFile(manifestPath, applicationClassName);
-            // update configuration file
-            const stringsXmlPath = findStringsXml(sourceDir);
-            console.log('stringsXmlPath: ' + stringsXmlPath);
-            if (stringsXmlPath != null) {
-              updateConfigurationFile(stringsXmlPath);
-            }
-
-          } else if (intMainPackageIndexLatest > 0) {
-            // add package name
-            var appfileNew = insert(appFile, intMainPackageIndexLatest, smiPackageNameFor62);
-            // add import
-            var intImportIndex = appFile.search("import")
-            appfileNew = insert(appfileNew, intImportIndex, packageImport);
-            appfileNew = insert(appfileNew, intImportIndex, packageImportArray);
-
-            //add sdStateChangeListner
-            var implementsIndex = appfileNew.search("implements");
-            if (implementsIndex > 0) {
-              appfileNew = insert(appfileNew, implementsIndex + 10, stateChangeListnerStr);
-            }
-            // add initSponsoredData Api
-            var intSuperIndex = appfileNew.search("super.onCreate()");
-            console.log('intSuperIndex: ' + intSuperIndex);
-            if (intSuperIndex > 0) {
-              appfileNew = insert(appfileNew, intSuperIndex + 17, initSponsoredDataAPI);
-            } else {
-              // add onCreate method with initSponsoredData API
-              var n = appfileNew.lastIndexOf("}");
-              console.log('lastIndexOf }: ' + n);
-              appfileNew = insert(appfileNew, n - 1, onCreateMethod);
-            }
-
-            // add onChange method
-            var lastchar = appfileNew.lastIndexOf("}");
-            console.log('lastchar: ' + n);
-
-            appfileNew = insert(appfileNew, lastchar - 1, onChangeMethod);
-
-            fs.writeFileSync(mainApplicationPath, appfileNew, 'utf8');
-
-            // const appFileNew2 = fs.readFileSync(mainApplicationPath, 'utf8')
-            updateManifestFile(manifestPath, applicationClassName);
-            // update configuration file
-            const stringsXmlPath = findStringsXml(sourceDir);
-            console.log('stringsXmlPath: ' + stringsXmlPath);
-            if (stringsXmlPath != null) {
-              updateConfigurationFile(stringsXmlPath);
-            }
-          } else {
-            console.log('Error MainReactPackage does not exist.');
-          }
-        } else {
-          console.log('SmiSdkReactPackage already exist.');
+    configEntries.forEach(({ key, type, value = "" }) => {
+        if (!stringsXmlDoc.includes(key)) {
+            stringsXmlDoc =
+                stringsXmlDoc.slice(0, resourcesEndIndex) +
+                `\n<${type} name="${key}">${value}</${type}>` +
+                stringsXmlDoc.slice(resourcesEndIndex);
         }
-      } else {
-        console.log('Error in getting applicationClassName.');
-      }
-    }
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-   };
+    });
 
-   projectConfigAndroid('../..')
+    fs.writeFileSync(confFilePath, stringsXmlDoc, "utf8");
+}
+
+function updateManifestFile(manifestPath, applicationClassName) {
+    console.log("Updating AndroidManifest.xml...");
+    const manifestXmlDoc = new DOMParser().parseFromString(
+        fs.readFileSync(manifestPath, "utf8")
+    );
+    const applicationNode =
+        manifestXmlDoc.getElementsByTagName("application")[0];
+
+    if (
+        applicationNode.getAttribute("android:name") !==
+        `.${applicationClassName}`
+    ) {
+        applicationNode.setAttribute(
+            "android:name",
+            `.${applicationClassName}`
+        );
+        fs.writeFileSync(
+            manifestPath,
+            new XMLSerializer().serializeToString(manifestXmlDoc),
+            "utf8"
+        );
+    }
+}
+
+function projectConfigAndroid(folder) {
+    const androidAppFolder = findAndroidAppFolder(folder);
+    if (!androidAppFolder) {
+        console.error("Android app folder not found.");
+        return;
+    }
+
+    const sourceDir = path.join(folder, androidAppFolder);
+    const manifestPath = findManifest(sourceDir);
+    if (!manifestPath) {
+        console.error("AndroidManifest.xml not found.");
+        return;
+    }
+
+    let applicationClassName = getApplicationClassName(sourceDir + "/src/main");
+    if (!applicationClassName) {
+        console.warn("Application class not found. Skipping update.");
+        return;
+    }
+
+    console.log("Detected application class:", applicationClassName);
+    const manifest = readManifest(manifestPath);
+    let packageName =
+        getPackageName(manifest) || readGradle(findGradleFile(sourceDir));
+
+    if (!packageName) {
+        console.error("Failed to determine package name.");
+        return;
+    }
+
+    console.log("Package Name:", packageName);
+    const packageFolder = packageName.replace(/\./g, path.sep);
+    const mainApplicationPath = path.join(
+        sourceDir,
+        `src/main/java/${packageFolder}/${applicationClassName}.java`
+    );
+
+    if (!fs.existsSync(mainApplicationPath)) {
+        console.warn(`Application file not found: ${mainApplicationPath}`);
+        return;
+    }
+
+    let appFile = fs.readFileSync(mainApplicationPath, "utf8");
+    if (!appFile.includes("SmiSdkReactPackage")) {
+        console.log("Injecting SmiSdkReactPackage into MainApplication.java");
+
+        const smiPackageName =
+            "\nimport com.datami.smisdk_plugin.SmiSdkReactPackage;";
+        const smiInitCode = `
+    SmiSdkReactPackage smiSdkReactPackage = new SmiSdkReactPackage();
+    packages.add(smiSdkReactPackage);
+    `;
+
+        // Ajuste para RN 0.74: PackageList.apply para adicionar pacotes
+        const regexAbove073 = /PackageList\(this\)\.packages\.apply/;
+        if (regexAbove073.test(appFile)) {
+            appFile = appFile.replace(
+                regexAbove073,
+                (match) => `${match} {\n    add(smiSdkReactPackage);\n}`
+            );
+        }
+
+        // Adiciona import
+        appFile = smiPackageName + appFile;
+        fs.writeFileSync(mainApplicationPath, appFile, "utf8");
+    } else {
+        console.log("SmiSdkReactPackage already exists.");
+    }
+
+    updateManifestFile(manifestPath, applicationClassName);
+    const stringsXmlPath = findStringsXml(sourceDir);
+    if (stringsXmlPath) {
+        updateConfigurationFile(stringsXmlPath);
+    }
+}
+
+projectConfigAndroid("../..");
